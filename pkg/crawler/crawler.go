@@ -2,70 +2,59 @@ package crawler
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"os"
-	"time"
+	"strings"
+	"sync"
 
 	"golang.org/x/net/html"
 )
 
-func Downloader(url string, filename string) (string, error) {
+func Crawler(urlChannel chan string, visitedURLs map[string]bool, visitedURLsMutex *sync.Mutex, done chan bool) {
+	for url := range urlChannel {
+		visitedURLsMutex.Lock()
+		if visitedURLs[url] {
+			continue
+		}
 
-	var client http.Client
-	fmt.Println("Downloading...", url)
-	resp, err := client.Get(url)
+		visitedURLs[url] = true
 
-	if err != nil {
-		return "", err
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		doc, err := html.Parse(resp.Body)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		links := extractLinks(doc)
+		for _, link := range links {
+			fmt.Println(link)
+			go func(link string) {
+				urlChannel <- link
+			}(link)
+		}
 	}
-
-	defer resp.Body.Close()
-
-	f, err := os.Create(filename)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	if err != nil {
-		return "", err
-	}
-	return filename, nil
+	done <- true
 }
 
-func Crawl(filename string) {
-	file, err := os.Open(filename)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer file.Close()
-
-	doc, err := html.Parse(file)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	links := findLinks(doc)
-	for _, link := range links {
-		time.Sleep(1 * time.Millisecond)
-		fmt.Println("link found ->", link)
-	}
-}
-
-func findLinks(n *html.Node) []string {
-	var NewLinks []string
+func extractLinks(n *html.Node) []string {
+	var links []string
 	if n.Type == html.ElementNode && n.Data == "a" {
 		for _, attr := range n.Attr {
 			if attr.Key == "href" {
-				NewLinks = append(NewLinks, attr.Val)
+				link := strings.TrimSpace(attr.Val)
+				if link != "" {
+					links = append(links, link)
+				}
 			}
 		}
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		NewLinks = append(NewLinks, findLinks(c)...)
+		links = append(links, extractLinks(c)...)
 	}
-	return NewLinks
+	return links
 }
